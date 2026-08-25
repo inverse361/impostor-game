@@ -42,10 +42,17 @@ const PeerNetwork = {
         return Math.random().toString(36).substr(2, 12);
     },
 
-    async apiCall(method, room, body) {
-        const url = `/api/signal?room=${room}`;
-        const opts = { method, headers: { 'Content-Type': 'application/json' } };
-        if (body) opts.body = JSON.stringify(body);
+    async apiCall(method, room, params) {
+        let url = `/api/signal?room=${room}`;
+        const opts = { method, headers: {} };
+        if (method === 'GET' && params) {
+            Object.entries(params).forEach(([k, v]) => {
+                url += `&${k}=${encodeURIComponent(v)}`;
+            });
+        } else if (params) {
+            opts.headers['Content-Type'] = 'application/json';
+            opts.body = JSON.stringify(params);
+        }
         const res = await fetch(url, opts);
         return res.json();
     },
