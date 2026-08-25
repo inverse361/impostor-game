@@ -46,10 +46,11 @@ export default async function handler(req, res) {
 
         if (req.method === 'GET') {
             const since = parseInt(req.query.since) || 0;
-            const msgs = await sbGet('messages',
-                `?select=payload&room_code=eq.${code}&ts=gt.${since}&order=ts.asc`
+            const rows = await sbGet('messages',
+                `?select=payload,ts&room_code=eq.${code}&ts=gt.${since}&order=ts.asc`
             );
-            return res.status(200).json({ messages: Array.isArray(msgs) ? msgs : [] });
+            const messages = Array.isArray(rows) ? rows.map(r => ({ ...r.payload, ts: r.ts })) : [];
+            return res.status(200).json({ messages });
         }
 
         if (req.method === 'POST') {

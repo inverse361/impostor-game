@@ -152,11 +152,11 @@ const PeerNetwork = {
 
     async waitForAnswer() {
         const start = Date.now();
-        while (Date.now() - start < 15000) {
-            const data = await this.apiCall('GET', this.roomCode, { since: this.lastMessageTs });
+        while (Date.now() - start < 20000) {
+            const data = await this.apiCall('GET', this.roomCode, { since: this.lastMessageTs || 0 });
             if (data.messages) {
                 for (const msg of data.messages) {
-                    this.lastMessageTs = Math.max(this.lastMessageTs, msg.ts);
+                    if (msg.ts && msg.ts > this.lastMessageTs) this.lastMessageTs = msg.ts;
                     if (msg.signalType === 'answer' && msg.to === this.myId) {
                         const conn = this.connections[this.hostId];
                         if (conn) {
@@ -172,7 +172,7 @@ const PeerNetwork = {
                     }
                 }
             }
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 800));
         }
         throw new Error('Timeout - nie otrzymano odpowiedzi od hosta');
     },
@@ -267,11 +267,11 @@ const PeerNetwork = {
 
         this.pollTimer = setInterval(async () => {
             try {
-                const data = await this.apiCall('GET', this.roomCode, { since: this.lastMessageTs });
+                const data = await this.apiCall('GET', this.roomCode, { since: this.lastMessageTs || 0 });
                 if (!data.messages) return;
 
                 for (const msg of data.messages) {
-                    this.lastMessageTs = Math.max(this.lastMessageTs, msg.ts);
+                    if (msg.ts && msg.ts > this.lastMessageTs) this.lastMessageTs = msg.ts;
 
                     if (msg.type === 'signal') {
                         if (msg.signalType === 'offer' && this.isHost && msg.to === this.myId) {
