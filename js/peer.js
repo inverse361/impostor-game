@@ -57,6 +57,28 @@ const PeerNetwork = {
         return res.json();
     },
 
+    async addIceCandidate(pc, candidate) {
+        if (pc.remoteDescription) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } else {
+            if (!pc._pendingCandidates) pc._pendingCandidates = [];
+            pc._pendingCandidates.push(candidate);
+        }
+    },
+
+    async flushPendingCandidates(pc) {
+        if (pc._pendingCandidates) {
+            for (const c of pc._pendingCandidates) {
+                try {
+                    await pc.addIceCandidate(new RTCIceCandidate(c));
+                } catch (e) {
+                    console.warn('Błąd dodawania buffered ICE:', e);
+                }
+            }
+            pc._pendingCandidates = null;
+        }
+    },
+
     async createRoom(playerName) {
         this.roomCode = this.generateRoomCode();
         this.isHost = true;
@@ -143,30 +165,29 @@ const PeerNetwork = {
             offer: pc.localDescription.toJSON()
         });
 
-        await this.waitForAnswer();
+        await this.waitForAnswer(pc);
     },
 
-    async waitForAnswer() {
+    async waitForAnswer(pc) {
         const start = Date.now();
         while (Date.now() - start < 20000) {
-            const data = await this.apiCall('GET', this.roomCode, { since: this.lastMessageTs || 0 });
-            if (data.messages) {
-                for (const msg of data.messages) {
-                    if (msg.ts && msg.ts > this.lastMessageTs) this.lastMessageTs = msg.ts;
-                    if (msg.signalType === 'answer' && msg.to === this.myId) {
-                        const conn = this.connections[this.hostId];
-                        if (conn) {
-                            await conn.pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
+            try {
+                const data = await this.apiCall('GET', this.roomCode, { since: this.lastMessageTs || 0 });
+                if (data.messages) {
+                    for (const msg of data.messages) {
+                        if (msg.ts && msg.ts > this.lastMessageTs) this.lastMessageTs = msg.ts;
+                        if (msg.signalType === 'answer' && msg.to === this.myId) {
+                            await pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
+                            await this.flushPendingCandidates(pc);
                             return;
                         }
-                    }
-                    if (msg.signalType === 'ice-candidate' && msg.to === this.myId) {
-                        const conn = this.connections[msg.from];
-                        if (conn && conn.pc) {
-                            await conn.pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                        if (msg.signalType === 'ice-candidate' && msg.to === this.myId) {
+                            await this.addIceCandidate(pc, msg.candidate);
                         }
                     }
                 }
+            } catch (e) {
+                console.warn('waitForAnswer error:', e);
             }
             await new Promise(r => setTimeout(r, 800));
         }
@@ -243,11 +264,7 @@ const PeerNetwork = {
     async handleIceCandidate(msg) {
         const conn = this.connections[msg.from];
         if (conn && conn.pc && msg.candidate) {
-            try {
-                await conn.pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
-            } catch (e) {
-                console.warn('Błąd dodawania ICE candidate:', e);
-            }
+            await this.addIceCandidate(conn.pc, msg.candidate);
         }
     },
 
@@ -281,6 +298,7 @@ const PeerNetwork = {
                             const conn = this.connections[this.hostId];
                             if (conn && conn.pc && !conn.pc.remoteDescription) {
                                 await conn.pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
+                                await this.flushPendingCandidates(conn.pc);
                             }
                         }
                         if (msg.signalType === 'ice-candidate' && msg.to === this.myId) {
