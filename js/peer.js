@@ -90,7 +90,6 @@ const PeerNetwork = {
         this.hostId = data.host;
 
         await this.connectToHost();
-
         this.startPolling();
     },
 
@@ -102,7 +101,7 @@ const PeerNetwork = {
         this.connections[this.hostId].dataChannel = dc;
 
         dc.onopen = () => {
-            console.log('DataChannel otwarty z hostem');
+            console.log('Client: DataChannel OPEN z hostem');
             if (this.callbacks.onConnected) this.callbacks.onConnected();
         };
 
@@ -112,7 +111,7 @@ const PeerNetwork = {
         };
 
         dc.onclose = () => {
-            console.log('DataChannel zamknięty z hostem');
+            console.log('Client: DataChannel CLOSE z hostem');
             if (this.callbacks.onDisconnected) this.callbacks.onDisconnected();
         };
 
@@ -129,10 +128,7 @@ const PeerNetwork = {
         };
 
         pc.onconnectionstatechange = () => {
-            console.log('Host connection state:', pc.connectionState);
-            if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                if (this.callbacks.onDisconnected) this.callbacks.onDisconnected();
-            }
+            console.log('Client connection state:', pc.connectionState);
         };
 
         const offer = await pc.createOffer();
@@ -184,27 +180,31 @@ const PeerNetwork = {
         if (this.connections[peerId]) return;
 
         const pc = new RTCPeerConnection(this.iceConfig);
-
-        const dc = pc.createDataChannel('game', { ordered: true });
-        const conn = { pc, dataChannel: dc, name: playerName };
+        const conn = { pc, dataChannel: null, name: playerName };
         this.connections[peerId] = conn;
 
-        dc.onopen = () => {
-            console.log('DataChannel otwarty z graczem:', playerName);
-            if (this.callbacks.onPlayerJoin) {
-                this.callbacks.onPlayerJoin({ id: peerId, name: playerName });
-            }
-        };
+        pc.ondatachannel = (event) => {
+            console.log('Host: otrzymano DataChannel od:', playerName);
+            const dc = event.channel;
+            conn.dataChannel = dc;
 
-        dc.onmessage = (e) => {
-            const data = JSON.parse(e.data);
-            if (this.callbacks.onMessage) this.callbacks.onMessage(data, peerId);
-        };
+            dc.onopen = () => {
+                console.log('Host: DataChannel OPEN z:', playerName);
+                if (this.callbacks.onPlayerJoin) {
+                    this.callbacks.onPlayerJoin({ id: peerId, name: playerName });
+                }
+            };
 
-        dc.onclose = () => {
-            console.log('Gracz rozłączony:', playerName);
-            delete this.connections[peerId];
-            if (this.callbacks.onPlayerLeave) this.callbacks.onPlayerLeave(peerId);
+            dc.onmessage = (e) => {
+                const data = JSON.parse(e.data);
+                if (this.callbacks.onMessage) this.callbacks.onMessage(data, peerId);
+            };
+
+            dc.onclose = () => {
+                console.log('Host: DataChannel CLOSE z:', playerName);
+                delete this.connections[peerId];
+                if (this.callbacks.onPlayerLeave) this.callbacks.onPlayerLeave(peerId);
+            };
         };
 
         pc.onicecandidate = async (e) => {
@@ -220,7 +220,7 @@ const PeerNetwork = {
         };
 
         pc.onconnectionstatechange = () => {
-            console.log(`Connection state z ${playerName}:`, pc.connectionState);
+            console.log(`Host: connection state z ${playerName}:`, pc.connectionState);
             if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
                 delete this.connections[peerId];
                 if (this.callbacks.onPlayerLeave) this.callbacks.onPlayerLeave(peerId);
@@ -255,8 +255,8 @@ const PeerNetwork = {
         const peerId = msg.peerId;
         const conn = this.connections[peerId];
         if (conn) {
-            if (conn.dataChannel) conn.dataChannel.close();
-            if (conn.pc) conn.pc.close();
+            try { if (conn.dataChannel) conn.dataChannel.close(); } catch (e) {}
+            try { if (conn.pc) conn.pc.close(); } catch (e) {}
             delete this.connections[peerId];
         }
         if (this.callbacks.onPlayerLeave) this.callbacks.onPlayerLeave(peerId);
@@ -279,7 +279,7 @@ const PeerNetwork = {
                         }
                         if (msg.signalType === 'answer' && !this.isHost && msg.to === this.myId) {
                             const conn = this.connections[this.hostId];
-                            if (conn && conn.pc) {
+                            if (conn && conn.pc && !conn.pc.remoteDescription) {
                                 await conn.pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
                             }
                         }
@@ -301,7 +301,7 @@ const PeerNetwork = {
             } catch (e) {
                 console.warn('Polling error:', e);
             }
-        }, 800);
+        }, 1000);
     },
 
     sendToHost(data) {
@@ -310,7 +310,6 @@ const PeerNetwork = {
             conn.dataChannel.send(JSON.stringify(data));
             return true;
         }
-        this.sendViaApi('host', data);
         return false;
     },
 
@@ -327,32 +326,15 @@ const PeerNetwork = {
         let sent = 0;
         Object.entries(this.connections).forEach(([id, conn]) => {
             if (id !== this.hostId && conn.dataChannel && conn.dataChannel.readyState === 'open') {
-                conn.dataChannel.send(JSON.stringify(data));
-                sent++;
+                try {
+                    conn.dataChannel.send(JSON.stringify(data));
+                    sent++;
+                } catch (e) {
+                    console.error('Błąd broadcast do', id, ':', e);
+                }
             }
         });
-        if (sent === 0) {
-            this.broadcastViaApi(data);
-        }
         return sent;
-    },
-
-    async sendViaApi(targetId, data) {
-        await this.apiCall('POST', this.roomCode, {
-            type: 'game-message',
-            from: this.myId,
-            to: targetId,
-            data
-        });
-    },
-
-    async broadcastViaApi(data) {
-        await this.apiCall('POST', this.roomCode, {
-            type: 'game-message',
-            from: this.myId,
-            to: 'all',
-            data
-        });
     },
 
     async disconnect() {
