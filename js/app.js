@@ -120,14 +120,13 @@ const App = {
             
             await PeerNetwork.createRoom(nick);
             
-            const myId = PeerNetwork.peer.id;
-            Game.state.myId = myId;
+            Game.state.myId = PeerNetwork.myId;
             Game.state.myName = nick;
             Game.state.isHost = true;
-            Game.state.hostId = myId;
+            Game.state.hostId = PeerNetwork.myId;
             
             Game.state.players = [{
-                id: myId,
+                id: PeerNetwork.myId,
                 name: nick
             }];
             
@@ -159,7 +158,7 @@ const App = {
             
             await PeerNetwork.joinRoom(code, nick);
             
-            Game.state.myId = PeerNetwork.peer.id;
+            Game.state.myId = PeerNetwork.myId;
             Game.state.myName = nick;
             Game.state.roomCode = code;
             
@@ -233,13 +232,13 @@ const App = {
                 
             case 'game-start':
                 Game.initGame(data.players, data.hostId, data.totalRounds, data.discussionTime);
-                this.showWordScreen();
                 break;
                 
             case 'word-assignment':
                 Game.state.currentRound = data.round;
                 Game.state.currentWord = data.wordData;
                 Game.state.impostorId = data.impostorId;
+                Game.state.alivePlayers = data.alivePlayers;
                 this.showWordScreenClient(data.assignments);
                 break;
                 
@@ -273,7 +272,7 @@ const App = {
                 break;
                 
             case 'round-result':
-                this.showRoundResultUI(data.result);
+                this.showRoundResultUI(data);
                 break;
                 
             case 'final-result':
@@ -293,14 +292,10 @@ const App = {
     broadcastSettings() {
         if (!Game.state.isHost) return;
         
-        const settings = {
-            totalRounds: parseInt(document.getElementById('rounds-select').value),
-            discussionTime: parseInt(document.getElementById('discussion-time').value)
-        };
-        
         PeerNetwork.broadcastToClients({
             type: 'settings-update',
-            ...settings
+            totalRounds: parseInt(document.getElementById('rounds-select').value),
+            discussionTime: parseInt(document.getElementById('discussion-time').value)
         });
     },
     
@@ -329,14 +324,15 @@ const App = {
                 assignments: assignments,
                 round: Game.state.currentRound,
                 wordData: Game.state.currentWord,
-                impostorId: Game.state.impostorId
+                impostorId: Game.state.impostorId,
+                alivePlayers: Game.state.alivePlayers
             });
             
-            this.showWordScreenHost(assignments);
-        }, 500);
+            this.showWordScreen(assignments);
+        }, 300);
     },
     
-    showWordScreenHost(assignments) {
+    showWordScreen(assignments) {
         const myAssignment = assignments[Game.state.myId];
         
         if (myAssignment) {
@@ -395,7 +391,7 @@ const App = {
     },
     
     startDiscussionUI() {
-        Game.startDiscussion();
+        Game.state.phase = 'discussion';
         
         const alivePlayers = Game.getAlivePlayers();
         UI.updateDiscussionPlayers(alivePlayers, null);
@@ -431,7 +427,8 @@ const App = {
     },
     
     startVotingUI() {
-        Game.startVoting();
+        Game.state.phase = 'voting';
+        Game.state.votes = {};
         this.selectedVote = null;
         
         const alivePlayers = Game.getAlivePlayers();
@@ -474,7 +471,7 @@ const App = {
                 targetId: this.selectedVote
             });
             
-            setTimeout(() => this.processRoundEnd(), 1000);
+            setTimeout(() => this.processRoundEnd(), 1500);
         } else {
             PeerNetwork.sendToHost({
                 type: 'vote',
@@ -497,7 +494,7 @@ const App = {
                 voterId: Game.state.myId
             });
             
-            setTimeout(() => this.processRoundEnd(), 1000);
+            setTimeout(() => this.processRoundEnd(), 1500);
         } else {
             PeerNetwork.sendToHost({
                 type: 'skip-vote',
@@ -521,15 +518,15 @@ const App = {
         this.showRoundResultUI(result);
     },
     
-    showRoundResultUI(result) {
+    showRoundResultUI(data) {
         UI.hideModal('waiting');
         
-        const r = result.result || result;
-        const s = result.scores || Game.getScores();
-        const round = r.round || Game.state.currentRound;
-        const totalRounds = r.totalRounds || Game.state.totalRounds;
+        const result = data.result || data;
+        const scores = result.scores || Game.getScores();
+        const round = result.round || Game.state.currentRound;
+        const totalRounds = result.totalRounds || Game.state.totalRounds;
         
-        UI.showRoundResult(r, s, round, totalRounds);
+        UI.showRoundResult(result, scores, round, totalRounds);
         UI.showScreen('round-result');
     },
     
@@ -560,10 +557,11 @@ const App = {
             assignments: assignments,
             round: Game.state.currentRound,
             wordData: Game.state.currentWord,
-            impostorId: Game.state.impostorId
+            impostorId: Game.state.impostorId,
+            alivePlayers: Game.state.alivePlayers
         });
         
-        this.showWordScreenHost(assignments);
+        this.showWordScreen(assignments);
     },
     
     showFinalResultUI(scores) {

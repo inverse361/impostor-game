@@ -1,15 +1,21 @@
 const PeerNetwork = {
-    peer: null,
-    connections: {},
     isHost: false,
-    hostPeerId: null,
     roomCode: null,
-    playerName: null,
     myId: null,
-    connected: false,
-    reconnectAttempts: 0,
-    maxReconnectAttempts: 5,
-    
+    myName: null,
+    hostId: null,
+    connections: {},
+    pollTimer: null,
+    lastMessageTs: 0,
+    iceConfig: {
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' }
+        ]
+    },
+
     callbacks: {
         onPlayerJoin: null,
         onPlayerLeave: null,
@@ -18,27 +24,11 @@ const PeerNetwork = {
         onConnected: null,
         onDisconnected: null
     },
-    
-    iceConfig: {
-        iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:stun3.l.google.com:19302' },
-            { urls: 'stun:stun4.l.google.com:19302' },
-            { urls: 'stun:stun.ekiga.net' },
-            { urls: 'stun:stun.ideasip.com' },
-            { urls: 'stun:stun.schlund.de' },
-            { urls: 'stun:stun.voiparound.com' },
-            { urls: 'stun:stun.voipstunt.com' }
-        ],
-        iceCandidatePoolSize: 10
-    },
-    
+
     init(callbacks) {
         this.callbacks = { ...this.callbacks, ...callbacks };
     },
-    
+
     generateRoomCode() {
         const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
         let code = '';
@@ -47,336 +37,347 @@ const PeerNetwork = {
         }
         return code;
     },
-    
-    createRoom(playerName) {
-        return new Promise((resolve, reject) => {
-            this.roomCode = this.generateRoomCode();
-            this.isHost = true;
-            this.playerName = playerName;
-            this.connected = false;
-            this.reconnectAttempts = 0;
-            
-            const peerId = `impostor-${this.roomCode}`;
-            
-            this.peer = new Peer(peerId, {
-                debug: 1,
-                config: this.iceConfig,
-                retryMaxTimeout: 5000,
-                retryTimeout: 1000
-            });
-            
-            const timeout = setTimeout(() => {
-                if (!this.connected) {
-                    reject(new Error('Timeout - nie można połączyć z serwerem sygnalizacyjnym PeerJS'));
-                }
-            }, 15000);
-            
-            this.peer.on('open', (id) => {
-                clearTimeout(timeout);
-                console.log('Host utworzony, ID:', id);
-                this.myId = id;
-                this.connected = true;
-                resolve(this.roomCode);
-            });
-            
-            this.peer.on('connection', (conn) => {
-                console.log('Nowe połączenie przychodzące:', conn.peer);
-                this.handleIncomingConnection(conn);
-            });
-            
-            this.peer.on('disconnected', () => {
-                console.log('Rozłączono z serwerem PeerJS');
-                this.tryReconnect();
-            });
-            
-            this.peer.on('close', () => {
-                console.log('Peer zamknięty');
-                this.connected = false;
-                if (this.callbacks.onDisconnected) {
-                    this.callbacks.onDisconnected();
-                }
-            });
-            
-            this.peer.on('error', (err) => {
-                clearTimeout(timeout);
-                console.error('Błąd PeerJS:', err);
-                if (err.type === 'unavailable-id') {
-                    reject(new Error('Pokój o tym kodzie już istnieje. Spróbuj inny kod.'));
-                } else if (err.type === 'network') {
-                    reject(new Error('Błąd sieci. Sprawdź połączenie internetowe.'));
-                } else if (err.type === 'peer-unavailable') {
-                    console.log('Gracz już istnieje, pomijam...');
-                } else {
-                    reject(new Error(`Błąd połączenia: ${err.message || err.type}`));
-                }
-            });
-        });
+
+    generateId() {
+        return Math.random().toString(36).substr(2, 12);
     },
-    
-    joinRoom(roomCode, playerName) {
-        return new Promise((resolve, reject) => {
-            this.roomCode = roomCode.toUpperCase();
-            this.isHost = false;
-            this.playerName = playerName;
-            this.hostPeerId = `impostor-${this.roomCode}`;
-            this.connected = false;
-            this.reconnectAttempts = 0;
-            
-            this.peer = new Peer(null, {
-                debug: 1,
-                config: this.iceConfig,
-                retryMaxTimeout: 5000,
-                retryTimeout: 1000
-            });
-            
-            const timeout = setTimeout(() => {
-                if (!this.connected) {
-                    reject(new Error('Timeout - nie można połączyć z serwerem. Sprawdź kod pokoju i połączenie internetowe.'));
-                }
-            }, 20000);
-            
-            this.peer.on('open', (id) => {
-                clearTimeout(timeout);
-                console.log('Klient dołączył, ID:', id);
-                this.myId = id;
-                
-                this.connectToHost(resolve, reject, timeout);
-            });
-            
-            this.peer.on('disconnected', () => {
-                console.log('Rozłączono z serwerem PeerJS');
-                this.tryReconnect();
-            });
-            
-            this.peer.on('close', () => {
-                console.log('Peer zamknięty');
-                this.connected = false;
-                if (this.callbacks.onDisconnected) {
-                    this.callbacks.onDisconnected();
-                }
-            });
-            
-            this.peer.on('error', (err) => {
-                clearTimeout(timeout);
-                console.error('Błąd PeerJS klienta:', err);
-                if (err.type === 'peer-unavailable') {
-                    reject(new Error(`Nie znaleziono pokoju ${this.roomCode}. Sprawdź kod.`));
-                } else if (err.type === 'network') {
-                    reject(new Error('Błąd sieci. Sprawdź połączenie internetowe.'));
-                } else {
-                    reject(new Error(`Nie udało się dołączyć: ${err.message || err.type}`));
-                }
-            });
-        });
+
+    async apiCall(method, room, body) {
+        const url = `/api/signal?room=${room}`;
+        const opts = { method, headers: { 'Content-Type': 'application/json' } };
+        if (body) opts.body = JSON.stringify(body);
+        const res = await fetch(url, opts);
+        return res.json();
     },
-    
-    connectToHost(resolve, reject, timeout) {
-        let connAttempts = 0;
-        const maxAttempts = 3;
-        
-        const tryConnect = () => {
-            connAttempts++;
-            console.log(`Próba połączenia z hostem (próba ${connAttempts}/${maxAttempts})...`);
-            
-            const conn = this.peer.connect(this.hostPeerId, {
-                metadata: { name: this.playerName },
-                reliable: true,
-                serialization: 'json'
-            });
-            
-            conn.on('open', () => {
-                clearTimeout(timeout);
-                console.log('Połączono z hostem!');
-                this.connections['host'] = conn;
-                this.setupConnection(conn, 'host');
-                this.connected = true;
-                
-                if (this.callbacks.onConnected) {
-                    this.callbacks.onConnected();
-                }
-                resolve();
-            });
-            
-            conn.on('error', (err) => {
-                console.error('Błąd połączenia z hostem:', err);
-                if (connAttempts < maxAttempts) {
-                    setTimeout(tryConnect, 2000);
-                } else {
-                    clearTimeout(timeout);
-                    reject(new Error('Nie udało się połączyć z hostem. Pokój może nie istnieć.'));
-                }
-            });
-            
-            conn.on('close', () => {
-                console.log('Połączenie z hostem zamknięte');
-                delete this.connections['host'];
-                this.connected = false;
-                if (this.callbacks.onDisconnected) {
-                    this.callbacks.onDisconnected();
-                }
-            });
+
+    async createRoom(playerName) {
+        this.roomCode = this.generateRoomCode();
+        this.isHost = true;
+        this.myName = playerName;
+        this.myId = this.generateId();
+        this.hostId = this.myId;
+
+        await this.apiCall('POST', this.roomCode, {
+            type: 'create',
+            peerId: this.myId,
+            name: playerName
+        });
+
+        this.startPolling();
+        return this.roomCode;
+    },
+
+    async joinRoom(roomCode, playerName) {
+        this.roomCode = roomCode.toUpperCase();
+        this.isHost = false;
+        this.myName = playerName;
+        this.myId = this.generateId();
+
+        const data = await this.apiCall('POST', this.roomCode, {
+            type: 'join',
+            peerId: this.myId,
+            name: playerName
+        });
+
+        if (data.error) throw new Error(data.error);
+        this.hostId = data.host;
+
+        await this.connectToHost();
+
+        this.startPolling();
+    },
+
+    async connectToHost() {
+        const pc = new RTCPeerConnection(this.iceConfig);
+        this.connections[this.hostId] = { pc, dataChannel: null, name: 'Host' };
+
+        const dc = pc.createDataChannel('game', { ordered: true });
+        this.connections[this.hostId].dataChannel = dc;
+
+        dc.onopen = () => {
+            console.log('DataChannel otwarty z hostem');
+            if (this.callbacks.onConnected) this.callbacks.onConnected();
         };
-        
-        tryConnect();
-    },
-    
-    handleIncomingConnection(conn) {
-        conn.on('open', () => {
-            const playerName = conn.metadata?.name || 'Gracz';
-            const playerId = conn.peer;
-            
-            console.log('Gracz połączony:', playerName, 'ID:', playerId);
-            
-            if (this.connections[playerId]) {
-                console.log('Gracz już istnieje, pomijam');
-                return;
-            }
-            
-            this.connections[playerId] = conn;
-            this.setupConnection(conn, playerId);
-            
-            if (this.callbacks.onPlayerJoin) {
-                this.callbacks.onPlayerJoin({
-                    id: playerId,
-                    name: playerName,
-                    conn: conn
+
+        dc.onmessage = (e) => {
+            const data = JSON.parse(e.data);
+            if (this.callbacks.onMessage) this.callbacks.onMessage(data, this.hostId);
+        };
+
+        dc.onclose = () => {
+            console.log('DataChannel zamknięty z hostem');
+            if (this.callbacks.onDisconnected) this.callbacks.onDisconnected();
+        };
+
+        pc.onicecandidate = async (e) => {
+            if (e.candidate) {
+                await this.apiCall('POST', this.roomCode, {
+                    type: 'signal',
+                    signalType: 'ice-candidate',
+                    from: this.myId,
+                    to: this.hostId,
+                    candidate: e.candidate.toJSON()
                 });
             }
-        });
-        
-        conn.on('error', (err) => {
-            console.error('Błąd połączenia z graczem:', conn.peer, err);
-        });
-    },
-    
-    setupConnection(conn, peerId) {
-        conn.on('data', (data) => {
-            if (this.callbacks.onMessage) {
-                this.callbacks.onMessage(data, peerId);
+        };
+
+        pc.onconnectionstatechange = () => {
+            console.log('Host connection state:', pc.connectionState);
+            if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                if (this.callbacks.onDisconnected) this.callbacks.onDisconnected();
             }
+        };
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        await this.apiCall('POST', this.roomCode, {
+            type: 'signal',
+            signalType: 'offer',
+            from: this.myId,
+            to: this.hostId,
+            name: this.myName,
+            offer: pc.localDescription.toJSON()
         });
-        
-        conn.on('close', () => {
-            console.log('Połączenie zamknięte:', peerId);
+
+        await this.waitForAnswer();
+    },
+
+    async waitForAnswer() {
+        const start = Date.now();
+        while (Date.now() - start < 15000) {
+            const data = await this.apiCall('GET', this.roomCode, { since: this.lastMessageTs });
+            if (data.messages) {
+                for (const msg of data.messages) {
+                    this.lastMessageTs = Math.max(this.lastMessageTs, msg.ts);
+                    if (msg.signalType === 'answer' && msg.to === this.myId) {
+                        const conn = this.connections[this.hostId];
+                        if (conn) {
+                            await conn.pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
+                            return;
+                        }
+                    }
+                    if (msg.signalType === 'ice-candidate' && msg.to === this.myId) {
+                        const conn = this.connections[msg.from];
+                        if (conn && conn.pc) {
+                            await conn.pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                        }
+                    }
+                }
+            }
+            await new Promise(r => setTimeout(r, 500));
+        }
+        throw new Error('Timeout - nie otrzymano odpowiedzi od hosta');
+    },
+
+    async handleOffer(msg) {
+        const peerId = msg.from;
+        const playerName = msg.name;
+
+        if (this.connections[peerId]) return;
+
+        const pc = new RTCPeerConnection(this.iceConfig);
+
+        const dc = pc.createDataChannel('game', { ordered: true });
+        const conn = { pc, dataChannel: dc, name: playerName };
+        this.connections[peerId] = conn;
+
+        dc.onopen = () => {
+            console.log('DataChannel otwarty z graczem:', playerName);
+            if (this.callbacks.onPlayerJoin) {
+                this.callbacks.onPlayerJoin({ id: peerId, name: playerName });
+            }
+        };
+
+        dc.onmessage = (e) => {
+            const data = JSON.parse(e.data);
+            if (this.callbacks.onMessage) this.callbacks.onMessage(data, peerId);
+        };
+
+        dc.onclose = () => {
+            console.log('Gracz rozłączony:', playerName);
             delete this.connections[peerId];
-            
-            if (this.callbacks.onPlayerLeave) {
-                this.callbacks.onPlayerLeave(peerId);
+            if (this.callbacks.onPlayerLeave) this.callbacks.onPlayerLeave(peerId);
+        };
+
+        pc.onicecandidate = async (e) => {
+            if (e.candidate) {
+                await this.apiCall('POST', this.roomCode, {
+                    type: 'signal',
+                    signalType: 'ice-candidate',
+                    from: this.myId,
+                    to: peerId,
+                    candidate: e.candidate.toJSON()
+                });
             }
-        });
-        
-        conn.on('error', (err) => {
-            console.error('Błąd połączenia z', peerId, ':', err);
+        };
+
+        pc.onconnectionstatechange = () => {
+            console.log(`Connection state z ${playerName}:`, pc.connectionState);
+            if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                delete this.connections[peerId];
+                if (this.callbacks.onPlayerLeave) this.callbacks.onPlayerLeave(peerId);
+            }
+        };
+
+        await pc.setRemoteDescription(new RTCSessionDescription(msg.offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        await this.apiCall('POST', this.roomCode, {
+            type: 'signal',
+            signalType: 'answer',
+            from: this.myId,
+            to: peerId,
+            answer: pc.localDescription.toJSON()
         });
     },
-    
-    tryReconnect() {
-        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            console.log('Przekroczono maksymalną liczbę prób reconnect');
-            if (this.callbacks.onDisconnected) {
-                this.callbacks.onDisconnected();
+
+    async handleIceCandidate(msg) {
+        const conn = this.connections[msg.from];
+        if (conn && conn.pc && msg.candidate) {
+            try {
+                await conn.pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+            } catch (e) {
+                console.warn('Błąd dodawania ICE candidate:', e);
             }
-            return;
         }
-        
-        this.reconnectAttempts++;
-        console.log(`Próba reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts}...`);
-        
-        setTimeout(() => {
-            if (this.peer && !this.peer.destroyed) {
-                this.peer.reconnect();
-            }
-        }, 2000 * this.reconnectAttempts);
     },
-    
+
+    async handlePlayerLeft(msg) {
+        const peerId = msg.peerId;
+        const conn = this.connections[peerId];
+        if (conn) {
+            if (conn.dataChannel) conn.dataChannel.close();
+            if (conn.pc) conn.pc.close();
+            delete this.connections[peerId];
+        }
+        if (this.callbacks.onPlayerLeave) this.callbacks.onPlayerLeave(peerId);
+    },
+
+    startPolling() {
+        if (this.pollTimer) clearInterval(this.pollTimer);
+
+        this.pollTimer = setInterval(async () => {
+            try {
+                const data = await this.apiCall('GET', this.roomCode, { since: this.lastMessageTs });
+                if (!data.messages) return;
+
+                for (const msg of data.messages) {
+                    this.lastMessageTs = Math.max(this.lastMessageTs, msg.ts);
+
+                    if (msg.type === 'signal') {
+                        if (msg.signalType === 'offer' && this.isHost && msg.to === this.myId) {
+                            await this.handleOffer(msg);
+                        }
+                        if (msg.signalType === 'answer' && !this.isHost && msg.to === this.myId) {
+                            const conn = this.connections[this.hostId];
+                            if (conn && conn.pc) {
+                                await conn.pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
+                            }
+                        }
+                        if (msg.signalType === 'ice-candidate' && msg.to === this.myId) {
+                            await this.handleIceCandidate(msg);
+                        }
+                    }
+
+                    if (msg.type === 'player-left') {
+                        await this.handlePlayerLeft(msg);
+                    }
+
+                    if (msg.type === 'game-message') {
+                        if (this.callbacks.onMessage) {
+                            this.callbacks.onMessage(msg.data, msg.from);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('Polling error:', e);
+            }
+        }, 800);
+    },
+
     sendToHost(data) {
-        if (this.connections['host'] && this.connections['host'].open) {
-            try {
-                this.connections['host'].send(data);
-                return true;
-            } catch (e) {
-                console.error('Błąd wysyłania do hosta:', e);
-                return false;
-            }
+        const conn = this.connections[this.hostId];
+        if (conn && conn.dataChannel && conn.dataChannel.readyState === 'open') {
+            conn.dataChannel.send(JSON.stringify(data));
+            return true;
         }
-        console.warn('Brak połączenia z hostem');
+        this.sendViaApi('host', data);
         return false;
     },
-    
+
     sendToPlayer(playerId, data) {
-        if (this.connections[playerId] && this.connections[playerId].open) {
-            try {
-                this.connections[playerId].send(data);
-                return true;
-            } catch (e) {
-                console.error('Błąd wysyłania do gracza:', playerId, e);
-                return false;
-            }
+        const conn = this.connections[playerId];
+        if (conn && conn.dataChannel && conn.dataChannel.readyState === 'open') {
+            conn.dataChannel.send(JSON.stringify(data));
+            return true;
         }
-        console.warn('Brak połączenia z graczem:', playerId);
         return false;
     },
-    
+
     broadcastToClients(data) {
         let sent = 0;
         Object.entries(this.connections).forEach(([id, conn]) => {
-            if (id !== 'host' && conn.open) {
-                try {
-                    conn.send(data);
-                    sent++;
-                } catch (e) {
-                    console.error('Błąd broadcast do', id, ':', e);
-                }
+            if (id !== this.hostId && conn.dataChannel && conn.dataChannel.readyState === 'open') {
+                conn.dataChannel.send(JSON.stringify(data));
+                sent++;
             }
         });
-        console.log(`Wysłano do ${sent} klientów`);
-        return sent;
-    },
-    
-    broadcastToAll(data) {
-        let sent = 0;
-        Object.values(this.connections).forEach(conn => {
-            if (conn.open) {
-                try {
-                    conn.send(data);
-                    sent++;
-                } catch (e) {
-                    console.error('Błąd broadcast:', e);
-                }
-            }
-        });
-        return sent;
-    },
-    
-    disconnect() {
-        console.log('Rozłączanie...');
-        
-        Object.values(this.connections).forEach(conn => {
-            try {
-                conn.close();
-            } catch (e) {}
-        });
-        
-        this.connections = {};
-        
-        if (this.peer && !this.peer.destroyed) {
-            this.peer.destroy();
+        if (sent === 0) {
+            this.broadcastViaApi(data);
         }
-        
-        this.peer = null;
+        return sent;
+    },
+
+    async sendViaApi(targetId, data) {
+        await this.apiCall('POST', this.roomCode, {
+            type: 'game-message',
+            from: this.myId,
+            to: targetId,
+            data
+        });
+    },
+
+    async broadcastViaApi(data) {
+        await this.apiCall('POST', this.roomCode, {
+            type: 'game-message',
+            from: this.myId,
+            to: 'all',
+            data
+        });
+    },
+
+    async disconnect() {
+        if (this.pollTimer) {
+            clearInterval(this.pollTimer);
+            this.pollTimer = null;
+        }
+
+        Object.values(this.connections).forEach(c => {
+            try { if (c.dataChannel) c.dataChannel.close(); } catch (e) {}
+            try { if (c.pc) c.pc.close(); } catch (e) {}
+        });
+
+        this.connections = {};
+
+        if (this.roomCode && this.myId) {
+            try {
+                await this.apiCall('POST', this.roomCode, {
+                    type: 'leave',
+                    peerId: this.myId
+                });
+            } catch (e) {}
+        }
+
         this.isHost = false;
-        this.hostPeerId = null;
+        this.hostId = null;
         this.roomCode = null;
-        this.playerName = null;
+        this.myName = null;
         this.myId = null;
-        this.connected = false;
     },
-    
+
     getConnectedPlayerCount() {
-        return Object.keys(this.connections).filter(id => id !== 'host').length;
-    },
-    
-    isConnected() {
-        return this.connected && this.peer && !this.peer.destroyed;
+        return Object.keys(this.connections).filter(id => id !== this.hostId).length;
     }
 };
