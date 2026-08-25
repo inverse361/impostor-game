@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Impostor - Kto jest szpiegiem?</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+</head>
+<body>
+    <div class="stars"></div>
+    <div class="stars2"></div>
+
+    <!-- MENU GŁÓWNE -->
+    <div id="screen-menu" class="screen active">
+        <div class="menu-container">
+            <h1 class="game-title">
+                <span class="title-icon">🕵️</span>
+                <span class="title-text">IMPOSTOR</span>
+            </h1>
+            <p class="subtitle">Kto jest szpiegiem?</p>
+            
+            <div class="menu-buttons">
+                <button id="btn-create" class="btn btn-primary btn-large">
+                    <span class="btn-icon">➕</span>
+                    Stwórz pokój
+                </button>
+                <button id="btn-join" class="btn btn-secondary btn-large">
+                    <span class="btn-icon">🚪</span>
+                    Dołącz do pokoju
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TWORZENIE POKOJU -->
+    <div id="screen-create" class="screen">
+        <div class="form-container">
+            <button class="btn-back" id="btn-back-create">← Powrót</button>
+            <h2>Tworzenie pokoju</h2>
+            
+            <div class="form-group">
+                <label for="create-nick">Twój nick:</label>
+                <input type="text" id="create-nick" placeholder="Wpisz swój nick..." maxlength="15">
+            </div>
+            
+            <button id="btn-create-room" class="btn btn-primary btn-large" disabled>
+                Stwórz pokój
+            </button>
+        </div>
+    </div>
+
+    <!-- DOŁĄCZANIE DO POKOJU -->
+    <div id="screen-join" class="screen">
+        <div class="form-container">
+            <button class="btn-back" id="btn-back-join">← Powrót</button>
+            <h2>Dołącz do pokoju</h2>
+            
+            <div class="form-group">
+                <label for="join-nick">Twój nick:</label>
+                <input type="text" id="join-nick" placeholder="Wpisz swój nick..." maxlength="15">
+            </div>
+            
+            <div class="form-group">
+                <label for="join-code">Kod pokoju:</label>
+                <input type="text" id="join-code" placeholder="Wpisz kod pokoju..." maxlength="10" style="text-transform: uppercase;">
+            </div>
+            
+            <button id="btn-join-room" class="btn btn-primary btn-large" disabled>
+                Dołącz do pokoju
+            </button>
+        </div>
+    </div>
+
+    <!-- POCZEKALNIA -->
+    <div id="screen-lobby" class="screen">
+        <div class="lobby-container">
+            <h2>Poczekalnia</h2>
+            
+            <div class="room-code-container">
+                <span class="room-code-label">Kod pokoju:</span>
+                <span id="room-code" class="room-code">---</span>
+                <button id="btn-copy-code" class="btn btn-small btn-copy" title="Kopiuj kod">📋</button>
+            </div>
+            
+            <div class="players-list-container">
+                <h3>Gracze w pokoju:</h3>
+                <div id="players-list" class="players-list"></div>
+            </div>
+            
+            <div class="lobby-actions">
+                <div class="settings-row">
+                    <label for="rounds-select">Liczba rund:</label>
+                    <select id="rounds-select">
+                        <option value="3">3</option>
+                        <option value="5" selected>5</option>
+                        <option value="7">7</option>
+                        <option value="10">10</option>
+                    </select>
+                </div>
+                <div class="settings-row">
+                    <label for="discussion-time">Czas dyskusji (sek):</label>
+                    <select id="discussion-time">
+                        <option value="30">30</option>
+                        <option value="60" selected>60</option>
+                        <option value="90">90</option>
+                        <option value="120">120</option>
+                    </select>
+                </div>
+            </div>
+            
+            <button id="btn-start-game" class="btn btn-primary btn-large btn-glow" disabled>
+                <span class="btn-icon">🚀</span>
+                Rozpocznij grę
+            </button>
+            <p id="lobby-status" class="lobby-status">Potrzeba minimum 3 graczy</p>
+        </div>
+    </div>
+
+    <!-- ROZDANIE HASEŁ -->
+    <div id="screen-word" class="screen">
+        <div class="word-container">
+            <h2>Twoje hasło</h2>
+            
+            <div class="word-card" id="word-card">
+                <div class="word-card-inner">
+                    <div class="word-card-front">
+                        <span class="word-icon">❓</span>
+                        <p>Kliknij aby odkryć</p>
+                    </div>
+                    <div class="word-card-back">
+                        <span class="word-label">Twoje hasło to:</span>
+                        <span id="player-word" class="word-text">---</span>
+                        <span id="impostor-warning" class="impostor-warning hidden">⚠️ JESTEŚ IMPOSTOREM! Nie znasz hasła.</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="word-info">
+                <p>Runda <span id="current-round">1</span> / <span id="total-rounds">5</span></p>
+            </div>
+            
+            <button id="btn-ready" class="btn btn-primary btn-large">
+                Jestem gotowy!
+            </button>
+        </div>
+    </div>
+
+    <!-- DYSCUSJA -->
+    <div id="screen-discussion" class="screen">
+        <div class="discussion-container">
+            <div class="discussion-header">
+                <h2>Dyskusja</h2>
+                <div class="timer" id="discussion-timer">60</div>
+                <p>Runda <span id="discussion-round">1</span> / <span id="discussion-total-rounds">5</span></p>
+            </div>
+            
+            <div class="discussion-players">
+                <h3>Gracze w grze:</h3>
+                <div id="discussion-players-list" class="discussion-players-grid"></div>
+            </div>
+            
+            <div class="discussion-instructions">
+                <p>📋 Opisz swoje hasło innym graczom. Impostor nie zna hasła!</p>
+                <p>🔍 Zadawaj pytania i szukaj podejrzanych.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- GŁOSOWANIE -->
+    <div id="screen-vote" class="screen">
+        <div class="vote-container">
+            <h2>Głosowanie</h2>
+            <p class="vote-instruction">Kogo uważasz za impostora?</p>
+            <p class="vote-timer" id="vote-timer">30</p>
+            
+            <div id="vote-players" class="vote-players-grid"></div>
+            
+            <button id="btn-submit-vote" class="btn btn-primary btn-large" disabled>
+                Oddaj głos
+            </button>
+            <button id="btn-skip-vote" class="btn btn-secondary">
+                Pomiń głosowanie
+            </button>
+        </div>
+    </div>
+
+    <!-- WYNIKI RUNDY -->
+    <div id="screen-round-result" class="screen">
+        <div class="result-container">
+            <h2>Wynik rundy</h2>
+            
+            <div id="round-result-content" class="round-result-content">
+                <!-- Dynamic content -->
+            </div>
+            
+            <div class="result-scores">
+                <h3>Tabela wyników:</h3>
+                <div id="result-scores-list" class="scores-list"></div>
+            </div>
+            
+            <button id="btn-next-round" class="btn btn-primary btn-large">
+                Następna runda
+            </button>
+        </div>
+    </div>
+
+    <!-- WYNIKI KOŃCOWE -->
+    <div id="screen-final-result" class="screen">
+        <div class="final-container">
+            <h2>🏆 Wyniki końcowe</h2>
+            
+            <div id="winner-announcement" class="winner-announcement">
+                <!-- Dynamic content -->
+            </div>
+            
+            <div class="final-scores">
+                <h3>Końcowa tabela:</h3>
+                <div id="final-scores-list" class="scores-list"></div>
+            </div>
+            
+            <div class="final-actions">
+                <button id="btn-play-again" class="btn btn-primary btn-large">
+                    <span class="btn-icon">🔄</span>
+                    Zagraj ponownie
+                </button>
+                <button id="btn-leave" class="btn btn-secondary btn-large">
+                    Opuść pokój
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL - Oczekiwanie na innych -->
+    <div id="modal-waiting" class="modal hidden">
+        <div class="modal-content">
+            <div class="spinner"></div>
+            <p>Oczekiwanie na innych graczy...</p>
+        </div>
+    </div>
+
+    <!-- MODAL - Błąd -->
+    <div id="modal-error" class="modal hidden">
+        <div class="modal-content modal-error">
+            <span class="modal-icon">❌</span>
+            <p id="error-message">Wystąpił błąd</p>
+            <button id="btn-close-error" class="btn btn-primary">OK</button>
+        </div>
+    </div>
+
+    <script src="js/words.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/game.js"></script>
+    <script src="js/peer.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
