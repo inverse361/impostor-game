@@ -4,25 +4,15 @@ const PeerNetwork = {
     myId: null,
     myName: null,
     hostId: null,
-    connections: {},
+    players: {},
     pollTimer: null,
     lastMessageTs: 0,
-    iceConfig: {
-        iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:stun3.l.google.com:19302' }
-        ]
-    },
 
     callbacks: {
         onPlayerJoin: null,
         onPlayerLeave: null,
         onMessage: null,
-        onConnectionError: null,
-        onConnected: null,
-        onDisconnected: null
+        onConnectionError: null
     },
 
     init(callbacks) {
@@ -39,7 +29,7 @@ const PeerNetwork = {
     },
 
     generateId() {
-        return Math.random().toString(36).substr(2, 12);
+        return Math.random().toString(36).substr(2, 12) + Date.now().toString(36);
     },
 
     async apiCall(method, room, params) {
@@ -57,28 +47,6 @@ const PeerNetwork = {
         return res.json();
     },
 
-    async addIceCandidate(pc, candidate) {
-        if (pc.remoteDescription) {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } else {
-            if (!pc._pendingCandidates) pc._pendingCandidates = [];
-            pc._pendingCandidates.push(candidate);
-        }
-    },
-
-    async flushPendingCandidates(pc) {
-        if (pc._pendingCandidates) {
-            for (const c of pc._pendingCandidates) {
-                try {
-                    await pc.addIceCandidate(new RTCIceCandidate(c));
-                } catch (e) {
-                    console.warn('Błąd dodawania buffered ICE:', e);
-                }
-            }
-            pc._pendingCandidates = null;
-        }
-    },
-
     async createRoom(playerName) {
         this.roomCode = this.generateRoomCode();
         this.isHost = true;
@@ -92,6 +60,7 @@ const PeerNetwork = {
             name: playerName
         });
 
+        this.players[this.myId] = { name: playerName };
         this.startPolling();
         return this.roomCode;
     },
@@ -111,172 +80,7 @@ const PeerNetwork = {
         if (data.error) throw new Error(data.error);
         this.hostId = data.host;
 
-        await this.connectToHost();
         this.startPolling();
-    },
-
-    async connectToHost() {
-        const pc = new RTCPeerConnection(this.iceConfig);
-        this.connections[this.hostId] = { pc, dataChannel: null, name: 'Host' };
-
-        const dc = pc.createDataChannel('game', { ordered: true });
-        this.connections[this.hostId].dataChannel = dc;
-
-        dc.onopen = () => {
-            console.log('Client: DataChannel OPEN z hostem');
-            if (this.callbacks.onConnected) this.callbacks.onConnected();
-        };
-
-        dc.onmessage = (e) => {
-            const data = JSON.parse(e.data);
-            if (this.callbacks.onMessage) this.callbacks.onMessage(data, this.hostId);
-        };
-
-        dc.onclose = () => {
-            console.log('Client: DataChannel CLOSE z hostem');
-            if (this.callbacks.onDisconnected) this.callbacks.onDisconnected();
-        };
-
-        pc.onicecandidate = async (e) => {
-            if (e.candidate) {
-                await this.apiCall('POST', this.roomCode, {
-                    type: 'signal',
-                    signalType: 'ice-candidate',
-                    from: this.myId,
-                    to: this.hostId,
-                    candidate: e.candidate.toJSON()
-                });
-            }
-        };
-
-        pc.onconnectionstatechange = () => {
-            console.log('Client connection state:', pc.connectionState);
-        };
-
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
-        await this.apiCall('POST', this.roomCode, {
-            type: 'signal',
-            signalType: 'offer',
-            from: this.myId,
-            to: this.hostId,
-            name: this.myName,
-            offer: pc.localDescription.toJSON()
-        });
-
-        await this.waitForAnswer(pc);
-    },
-
-    async waitForAnswer(pc) {
-        const start = Date.now();
-        while (Date.now() - start < 20000) {
-            try {
-                const data = await this.apiCall('GET', this.roomCode, { since: this.lastMessageTs || 0 });
-                if (data.messages) {
-                    for (const msg of data.messages) {
-                        if (msg.ts && msg.ts > this.lastMessageTs) this.lastMessageTs = msg.ts;
-                        if (msg.signalType === 'answer' && msg.to === this.myId) {
-                            await pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
-                            await this.flushPendingCandidates(pc);
-                            return;
-                        }
-                        if (msg.signalType === 'ice-candidate' && msg.to === this.myId) {
-                            await this.addIceCandidate(pc, msg.candidate);
-                        }
-                    }
-                }
-            } catch (e) {
-                console.warn('waitForAnswer error:', e);
-            }
-            await new Promise(r => setTimeout(r, 800));
-        }
-        throw new Error('Timeout - nie otrzymano odpowiedzi od hosta');
-    },
-
-    async handleOffer(msg) {
-        const peerId = msg.from;
-        const playerName = msg.name;
-
-        if (this.connections[peerId]) return;
-
-        const pc = new RTCPeerConnection(this.iceConfig);
-        const conn = { pc, dataChannel: null, name: playerName };
-        this.connections[peerId] = conn;
-
-        pc.ondatachannel = (event) => {
-            console.log('Host: otrzymano DataChannel od:', playerName);
-            const dc = event.channel;
-            conn.dataChannel = dc;
-
-            dc.onopen = () => {
-                console.log('Host: DataChannel OPEN z:', playerName);
-                if (this.callbacks.onPlayerJoin) {
-                    this.callbacks.onPlayerJoin({ id: peerId, name: playerName });
-                }
-            };
-
-            dc.onmessage = (e) => {
-                const data = JSON.parse(e.data);
-                if (this.callbacks.onMessage) this.callbacks.onMessage(data, peerId);
-            };
-
-            dc.onclose = () => {
-                console.log('Host: DataChannel CLOSE z:', playerName);
-                delete this.connections[peerId];
-                if (this.callbacks.onPlayerLeave) this.callbacks.onPlayerLeave(peerId);
-            };
-        };
-
-        pc.onicecandidate = async (e) => {
-            if (e.candidate) {
-                await this.apiCall('POST', this.roomCode, {
-                    type: 'signal',
-                    signalType: 'ice-candidate',
-                    from: this.myId,
-                    to: peerId,
-                    candidate: e.candidate.toJSON()
-                });
-            }
-        };
-
-        pc.onconnectionstatechange = () => {
-            console.log(`Host: connection state z ${playerName}:`, pc.connectionState);
-            if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                delete this.connections[peerId];
-                if (this.callbacks.onPlayerLeave) this.callbacks.onPlayerLeave(peerId);
-            }
-        };
-
-        await pc.setRemoteDescription(new RTCSessionDescription(msg.offer));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        await this.apiCall('POST', this.roomCode, {
-            type: 'signal',
-            signalType: 'answer',
-            from: this.myId,
-            to: peerId,
-            answer: pc.localDescription.toJSON()
-        });
-    },
-
-    async handleIceCandidate(msg) {
-        const conn = this.connections[msg.from];
-        if (conn && conn.pc && msg.candidate) {
-            await this.addIceCandidate(conn.pc, msg.candidate);
-        }
-    },
-
-    async handlePlayerLeft(msg) {
-        const peerId = msg.peerId;
-        const conn = this.connections[peerId];
-        if (conn) {
-            try { if (conn.dataChannel) conn.dataChannel.close(); } catch (e) {}
-            try { if (conn.pc) conn.pc.close(); } catch (e) {}
-            delete this.connections[peerId];
-        }
-        if (this.callbacks.onPlayerLeave) this.callbacks.onPlayerLeave(peerId);
     },
 
     startPolling() {
@@ -290,27 +94,23 @@ const PeerNetwork = {
                 for (const msg of data.messages) {
                     if (msg.ts && msg.ts > this.lastMessageTs) this.lastMessageTs = msg.ts;
 
-                    if (msg.type === 'signal') {
-                        if (msg.signalType === 'offer' && this.isHost && msg.to === this.myId) {
-                            await this.handleOffer(msg);
-                        }
-                        if (msg.signalType === 'answer' && !this.isHost && msg.to === this.myId) {
-                            const conn = this.connections[this.hostId];
-                            if (conn && conn.pc && !conn.pc.remoteDescription) {
-                                await conn.pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
-                                await this.flushPendingCandidates(conn.pc);
+                    if (msg.type === 'join') {
+                        if (this.isHost && msg.peerId !== this.myId) {
+                            this.players[msg.peerId] = { name: msg.name };
+                            if (this.callbacks.onPlayerJoin) {
+                                this.callbacks.onPlayerJoin({ id: msg.peerId, name: msg.name });
                             }
                         }
-                        if (msg.signalType === 'ice-candidate' && msg.to === this.myId) {
-                            await this.handleIceCandidate(msg);
-                        }
+                        continue;
                     }
 
                     if (msg.type === 'player-left') {
-                        await this.handlePlayerLeft(msg);
+                        if (this.callbacks.onPlayerLeave) this.callbacks.onPlayerLeave(msg.peerId);
+                        continue;
                     }
 
                     if (msg.type === 'game-message') {
+                        if (msg.to && msg.to !== this.myId) continue;
                         if (this.callbacks.onMessage) {
                             this.callbacks.onMessage(msg.data, msg.from);
                         }
@@ -319,40 +119,42 @@ const PeerNetwork = {
             } catch (e) {
                 console.warn('Polling error:', e);
             }
-        }, 1000);
+        }, 800);
     },
 
-    sendToHost(data) {
-        const conn = this.connections[this.hostId];
-        if (conn && conn.dataChannel && conn.dataChannel.readyState === 'open') {
-            conn.dataChannel.send(JSON.stringify(data));
-            return true;
-        }
-        return false;
+    async sendToHost(data) {
+        await this.apiCall('POST', this.roomCode, {
+            type: 'game-message',
+            from: this.myId,
+            to: this.hostId,
+            data: data
+        });
     },
 
-    sendToPlayer(playerId, data) {
-        const conn = this.connections[playerId];
-        if (conn && conn.dataChannel && conn.dataChannel.readyState === 'open') {
-            conn.dataChannel.send(JSON.stringify(data));
-            return true;
-        }
-        return false;
+    async sendToPlayer(playerId, data) {
+        await this.apiCall('POST', this.roomCode, {
+            type: 'game-message',
+            from: this.myId,
+            to: playerId,
+            data: data
+        });
     },
 
-    broadcastToClients(data) {
-        let sent = 0;
-        Object.entries(this.connections).forEach(([id, conn]) => {
-            if (id !== this.hostId && conn.dataChannel && conn.dataChannel.readyState === 'open') {
-                try {
-                    conn.dataChannel.send(JSON.stringify(data));
-                    sent++;
-                } catch (e) {
-                    console.error('Błąd broadcast do', id, ':', e);
-                }
+    async broadcastToClients(data) {
+        const promises = [];
+        Object.keys(this.players).forEach(id => {
+            if (id !== this.myId) {
+                promises.push(
+                    this.apiCall('POST', this.roomCode, {
+                        type: 'game-message',
+                        from: this.myId,
+                        to: id,
+                        data: data
+                    }).catch(e => console.error('Broadcast error:', e))
+                );
             }
         });
-        return sent;
+        await Promise.all(promises);
     },
 
     async disconnect() {
@@ -360,13 +162,6 @@ const PeerNetwork = {
             clearInterval(this.pollTimer);
             this.pollTimer = null;
         }
-
-        Object.values(this.connections).forEach(c => {
-            try { if (c.dataChannel) c.dataChannel.close(); } catch (e) {}
-            try { if (c.pc) c.pc.close(); } catch (e) {}
-        });
-
-        this.connections = {};
 
         if (this.roomCode && this.myId) {
             try {
@@ -382,9 +177,10 @@ const PeerNetwork = {
         this.roomCode = null;
         this.myName = null;
         this.myId = null;
+        this.players = {};
     },
 
     getConnectedPlayerCount() {
-        return Object.keys(this.connections).filter(id => id !== this.hostId).length;
+        return Object.keys(this.players).length - 1;
     }
 };

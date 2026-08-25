@@ -152,8 +152,7 @@ const App = {
                 onPlayerJoin: (player) => this.handlePlayerJoin(player),
                 onPlayerLeave: (playerId) => this.handlePlayerLeave(playerId),
                 onMessage: (data, peerId) => this.handleMessage(data, peerId),
-                onConnectionError: (err) => this.handleError(err),
-                onConnected: () => this.handleConnected()
+                onConnectionError: (err) => this.handleError(err)
             });
             
             await PeerNetwork.joinRoom(code, nick);
@@ -167,13 +166,6 @@ const App = {
         } finally {
             UI.setButtonLoading('btn-join-room', false);
         }
-    },
-    
-    handleConnected() {
-        PeerNetwork.sendToHost({
-            type: 'player-join',
-            name: Game.state.myName
-        });
     },
     
     handlePlayerJoin(player) {
@@ -365,6 +357,9 @@ const App = {
     playerReady() {
         if (Game.state.isHost) {
             const allReady = Game.playerReady(Game.state.myId);
+            
+            document.getElementById('btn-ready').disabled = true;
+            document.getElementById('btn-ready').textContent = 'Oczekiwanie na innych...';
             
             if (allReady) {
                 this.startDiscussion();
